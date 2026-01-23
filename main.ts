@@ -270,7 +270,7 @@ async function searchPaperlessDocuments(settings: PluginSettings, searchQuery: s
 	if (tagIds.length > 0) {
 		urlStr += '&tags__id__all=' + tagIds.join(',');
 	}
-	console.log(urlStr)
+	console.log("Querying " + urlStr)
 	const url = new URL(urlStr);
 	try {
 		const result = await requestUrl({
