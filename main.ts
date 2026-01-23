@@ -262,6 +262,26 @@ async function createDocument(editor: Editor, settings: PluginSettings, paperles
 	editor.replaceRange('![[' + filename + ']]', paperlessUrl.range.from, paperlessUrl.range.to);
 }
 
+async function searchPaperlessDocuments(settings: PluginSettings, searchQuery: string): Promise<string[]> {
+	const url = new URL(settings.paperlessUrl + '/api/documents/?query=' + encodeURIComponent(searchQuery) + '&format=json');
+	try {
+		const result = await requestUrl({
+			url: url.toString(),
+			headers: {
+				'Authorization': 'token ' + settings.paperlessAuthToken
+			}
+		});
+		if (result.status === 200 && result.json['all']) {
+			return result.json['all'];
+		}
+		console.error('Search returned unexpected response:', result);
+		return [];
+	} catch (error) {
+		console.error('Error searching Paperless:', error);
+		throw error;
+	}
+}
+
 class DocumentSelectorModal extends Modal {
 	editor: Editor;
 	settings: PluginSettings;
@@ -271,6 +291,7 @@ class DocumentSelectorModal extends Modal {
 	scrollContainer: HTMLElement | null;
 	isLoading: boolean;
 	scrollTimeout: number | null;
+	searchTimeout: number | null;
 
 	constructor(app: App, editor: Editor, settings: PluginSettings) {
 		super(app);
@@ -282,6 +303,7 @@ class DocumentSelectorModal extends Modal {
 		this.scrollContainer = null;
 		this.isLoading = false;
 		this.scrollTimeout = null;
+		this.searchTimeout = null;
 	}
 
 	async displayThumbnail(imgElement: HTMLImageElement, documentId: string) {
@@ -326,6 +348,16 @@ class DocumentSelectorModal extends Modal {
 		const titleDiv = header.createDiv({cls: 'obsidian-paperless-title'});
 		titleDiv.setText('Insert document');
 
+		// Search box in header
+		const searchInput = header.createEl('input', {
+			type: 'text',
+			placeholder: 'Search documents...',
+			cls: 'obsidian-paperless-search-input'
+		});
+		searchInput.style.marginLeft = '10px';
+		searchInput.style.padding = '5px';
+		searchInput.style.flex = '1';
+
 		const refreshButton = header.createEl('button', {
 			text: '\u21bb',
 			cls: 'obsidian-paperless-refresh-button'
@@ -347,7 +379,7 @@ class DocumentSelectorModal extends Modal {
 		};
 
 		const totalWidth = contentEl.innerWidth;
-		const availableDocumentIds = cachedResult.json['all'].sort((a:String, b:String) => {return +a - +b}).reverse();
+		let availableDocumentIds = cachedResult.json['all'].sort((a:String, b:String) => {return +a - +b}).reverse();
 		const totalAssets = availableDocumentIds.length;
 
 		// Create scroll container
@@ -366,6 +398,54 @@ class DocumentSelectorModal extends Modal {
 		const loadingDiv = this.scrollContainer.createDiv({cls: 'obsidian-paperless-loading'});
 		loadingDiv.setText('Loading documents...');
 		loadingDiv.style.display = 'none';
+
+		searchInput.addEventListener('input', async (e) => {
+			if (this.searchTimeout) {
+				clearTimeout(this.searchTimeout);
+			}
+
+			// Debounce: wait 500ms after user stops typing
+			this.searchTimeout = window.setTimeout(async () => {
+				const searchQuery = (e.target as HTMLInputElement).value.trim();
+				
+				if (searchQuery === '') {
+					// Reset to cached results
+					availableDocumentIds = cachedResult.json['all'].sort((a:String, b:String) => {return +a - +b}).reverse();
+				} else {
+					// Perform search
+					searchInput.disabled = true;
+					loadingDiv.setText('Searching...');
+					loadingDiv.style.display = 'block';
+					
+					try {
+						const searchResults = await searchPaperlessDocuments(this.settings, searchQuery);
+						availableDocumentIds = searchResults.sort((a:String, b:String) => {return +a - +b}).reverse();
+					} catch (error) {
+						new Notice('Failed to search documents');
+						console.error('Search failed:', error);
+						loadingDiv.style.display = 'none';
+					} finally {
+						searchInput.disabled = false;
+						loadingDiv.style.display = 'none';
+					}
+				}
+				
+				// Reset and reload modal content
+				this.currentPage = 0;
+				this.loadedAssets.clear();
+				left.empty();
+				right.empty();
+				
+				// Scroll to top
+				if (this.scrollContainer) {
+					this.scrollContainer.scrollTop = 0;
+				}
+				
+				// Initial load: load more items to ensure scrollbar appears on large screens
+				const initialBatchSize = Math.max(this.batchSize * 3, 20);
+				this.loadBatch(left, right, totalWidth, availableDocumentIds, 0, Math.min(initialBatchSize, availableDocumentIds.length), loadingDiv);
+			}, 500);
+		});
 
 		// Setup scroll listener with throttling
 		this.setupScrollListener(left, right, totalWidth, availableDocumentIds, loadingDiv);
@@ -461,6 +541,9 @@ class DocumentSelectorModal extends Modal {
 	onClose() {
 		if (this.scrollTimeout) {
 			clearTimeout(this.scrollTimeout);
+		}
+		if (this.searchTimeout) {
+			clearTimeout(this.searchTimeout);
 		}
 		this.loadedAssets.clear();
 		const {contentEl} = this;
