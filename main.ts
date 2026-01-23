@@ -265,13 +265,23 @@ async function createDocument(editor: Editor, settings: PluginSettings, paperles
 class DocumentSelectorModal extends Modal {
 	editor: Editor;
 	settings: PluginSettings;
-	page: number;
+	currentPage: number;
+	batchSize: number;
+	loadedAssets: Map<number, HTMLElement>;
+	scrollContainer: HTMLElement | null;
+	isLoading: boolean;
+	scrollTimeout: number | null;
 
 	constructor(app: App, editor: Editor, settings: PluginSettings) {
 		super(app);
 		this.editor = editor;
 		this.settings = settings;
-		this.page = 0;
+		this.currentPage = 0;
+		this.batchSize = 6;
+		this.loadedAssets = new Map();
+		this.scrollContainer = null;
+		this.isLoading = false;
+		this.scrollTimeout = null;
 	}
 
 	async displayThumbnail(imgElement: HTMLImageElement, documentId: string) {
@@ -305,50 +315,154 @@ class DocumentSelectorModal extends Modal {
 
 	async onOpen() {
 		const {contentEl} = this;
+
 		if (cachedResult == null) {
 			await refreshCacheFromPaperless(this.settings);
 		}
 
-		const documentDiv = contentEl.createDiv({cls: 'obsidian-paperless-row'});
-		const left = documentDiv.createDiv({cls: 'obsidian-paperless-column'});
-		const right = documentDiv.createDiv({cls: 'obsidian-paperless-column'});
-		const bottomDiv = contentEl.createDiv();
+		// Create header with title and refresh button
+		const header = contentEl.createDiv({cls: 'obsidian-paperless-header'});
+
+		const titleDiv = header.createDiv({cls: 'obsidian-paperless-title'});
+		titleDiv.setText('Insert document');
+
+		const refreshButton = header.createEl('button', {
+			text: '\u21bb',
+			cls: 'obsidian-paperless-refresh-button'
+		});
+		refreshButton.onclick = async () => {
+			refreshButton.disabled = true;
+			refreshButton.setText('Loading...');
+			try {
+				await refreshCacheFromPaperless(this.settings, false);
+				// Reload the modal
+				this.onClose();
+				this.onOpen();
+			} catch (error) {
+				new Notice('Failed to refresh cache');
+				console.error('Refresh failed:', error);
+				refreshButton.disabled = false;
+				refreshButton.setText('\u21bb Refresh');
+			}
+		};
+
+		const totalWidth = contentEl.innerWidth;
 		const availableDocumentIds = cachedResult.json['all'].sort((a:String, b:String) => {return +a - +b}).reverse();
-		let observer = new IntersectionObserver(() => {
-			const startIndex = this.page;
-			let endIndex = this.page + 16;
-			if (endIndex > availableDocumentIds.length) {
-				endIndex = availableDocumentIds.length;
+		const totalAssets = availableDocumentIds.length;
+
+		// Create scroll container
+		this.scrollContainer = contentEl.createDiv({cls: 'obsidian-paperless-scroll-container'});
+		this.scrollContainer.setAttribute('data-paperless-modal-content', 'true');
+		this.scrollContainer.style.maxHeight = '70vh';
+		this.scrollContainer.style.overflowY = 'auto';
+
+		const row = this.scrollContainer.createDiv({cls: 'obsidian-paperless-row'});
+		const leftColumn = row.createDiv({cls: 'obsidian-paperless-column'});
+		const rightColumn = row.createDiv({cls: 'obsidian-paperless-column'});
+		const left = leftColumn.createDiv({cls: 'obsidian-paperless-column-content'});
+		const right = rightColumn.createDiv({cls: 'obsidian-paperless-column-content'});
+
+		// Create loading indicator inside scroll container
+		const loadingDiv = this.scrollContainer.createDiv({cls: 'obsidian-paperless-loading'});
+		loadingDiv.setText('Loading documents...');
+		loadingDiv.style.display = 'none';
+
+		// Setup scroll listener with throttling
+		this.setupScrollListener(left, right, totalWidth, availableDocumentIds, loadingDiv);
+
+		// Initial load: load more items to ensure scrollbar appears on large screens
+		const initialBatchSize = Math.max(this.batchSize * 3, 20); // Load at least 20 items initially
+		this.loadBatch(left, right, totalWidth, availableDocumentIds, 0, Math.min(initialBatchSize, totalAssets), loadingDiv);
+	}
+
+	private setupScrollListener(left: HTMLElement, right: HTMLElement, totalWidth: number, availableDocumentIds: string[], loadingDiv: HTMLElement) {
+		if (!this.scrollContainer) return;
+
+		this.scrollContainer.addEventListener('scroll', () => {
+			if (this.scrollTimeout) {
+				clearTimeout(this.scrollTimeout);
 			}
-			this.page = endIndex;
-			for (let i = startIndex; i < endIndex; i++) {
-				const documentId = availableDocumentIds[i];
-				const overallDiv = ( i & 1 ) ? right.createDiv({cls: 'obsidian-paperless-overallDiv'}) : left.createDiv({cls: 'obsidian-paperless-overallDiv'});
-				const imageDiv = overallDiv.createDiv({cls: 'obsidian-paperless-imageDiv'});
-				const tagDiv = overallDiv.createDiv({cls: 'obsidian-paperless-tagDiv'});
-				this.displayTags(tagDiv, documentId);
-				const imgElement = imageDiv.createEl('img');
-				imgElement.width = 260;
-				imgElement.onclick = () => {
-					const cursor = this.editor.getCursor();
-					const line = this.editor.getLine(cursor.line);				
-					const documentInfo: PaperlessInsertionData = {
-						documentId: documentId,
-						range: { 
-							from: { line: cursor.line, ch: cursor.ch },
-							to: { line: cursor.line, ch: cursor.ch }
-						}
+
+			this.scrollTimeout = window.setTimeout(() => {
+				this.checkAndLoadMore(left, right, totalWidth, availableDocumentIds, loadingDiv);
+			}, 150); // Throttle to 150ms
+		});
+	}
+
+	private checkAndLoadMore(left: HTMLElement, right: HTMLElement, totalWidth: number, availableDocumentIds: string[], loadingDiv: HTMLElement) {
+		if (!this.scrollContainer || this.isLoading || this.currentPage >= availableDocumentIds.length) {
+			return;
+		}
+
+		const scrollTop = this.scrollContainer.scrollTop;
+		const scrollHeight = this.scrollContainer.scrollHeight;
+		const clientHeight = this.scrollContainer.clientHeight;
+		const scrollPercentage = (scrollTop + clientHeight) / scrollHeight;
+
+		// Load more when user scrolls past 60% or when near bottom
+		if (scrollPercentage > 0.6 || (scrollHeight - (scrollTop + clientHeight) < 300)) {
+			const endIndex = Math.min(this.currentPage + this.batchSize, availableDocumentIds.length);
+			this.loadBatch(left, right, totalWidth, availableDocumentIds, this.currentPage, endIndex, loadingDiv);
+		}
+	}
+
+	private loadBatch(left: HTMLElement, right: HTMLElement, totalWidth: number, availableDocumentIds: string[], startIndex: number, endIndex: number, loadingDiv: HTMLElement) {
+		if (this.isLoading || startIndex >= availableDocumentIds.length) return;
+
+		this.isLoading = true;
+		loadingDiv.style.display = 'block';
+
+		for (let i = startIndex; i < endIndex; i++) {
+			if (this.loadedAssets.has(i)) continue;
+
+			const documentId = availableDocumentIds[i];
+			const targetColumn = (i & 1) ? right : left;
+			const overallDiv = targetColumn.createDiv({cls: 'obsidian-paperless-overallDiv'});
+			const imageDiv = overallDiv.createDiv({cls: 'obsidian-paperless-imageDiv'});
+			const tagDiv = overallDiv.createDiv({cls: 'obsidian-paperless-tagDiv'});
+			
+			this.displayTags(tagDiv, documentId);
+			
+			const imgElement = imageDiv.createEl('img');
+			imgElement.width = (totalWidth / 2) - 5;
+			imgElement.style.cursor = 'pointer';
+			
+			imgElement.onclick = () => {
+				const cursor = this.editor.getCursor();
+				const documentInfo: PaperlessInsertionData = {
+					documentId: documentId,
+					range: { 
+						from: { line: cursor.line, ch: cursor.ch },
+						to: { line: cursor.line, ch: cursor.ch }
 					}
-					createDocument(this.editor, this.settings, documentInfo);
-					overallDiv.setCssStyles({opacity: '0.5'})
 				}
-				this.displayThumbnail(imgElement, documentId);
+				createDocument(this.editor, this.settings, documentInfo);
+				overallDiv.setCssStyles({opacity: '0.5'});
+			};
+			
+			imgElement.onerror = () => {
+				overallDiv.setText('Failed to load');
+			};
+			
+			this.displayThumbnail(imgElement, documentId);
+			this.loadedAssets.set(i, overallDiv);
+		}
+
+		this.currentPage = endIndex;
+
+		setTimeout(() => {
+			this.isLoading = false;
+			if (endIndex >= availableDocumentIds.length) {
+				loadingDiv.style.display = 'none';
 			}
-		}, {threshold: [0.1]});
-		observer.observe(bottomDiv);
+		}, 100);
 	}
 
 	onClose() {
+		if (this.scrollTimeout) {
+			clearTimeout(this.scrollTimeout);
+		}
+		this.loadedAssets.clear();
 		const {contentEl} = this;
 		contentEl.empty();
 	}

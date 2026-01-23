@@ -1,6 +1,71 @@
+.obsidian-paperless-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--background-modifier-border);
+    margin-bottom: 12px;
+    gap: 12px;
+}
+
+.obsidian-paperless-title {
+    font-size: 16px;
+    font-weight: 600;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.obsidian-paperless-refresh-button {
+    padding: 6px 12px;
+    border-radius: 4px;
+    background-color: var(--interactive-normal);
+    border: none;
+    cursor: pointer;
+    font-size: 14px;
+    transition: background-color 0.2s;
+}
+
+.obsidian-paperless-refresh-button:hover {
+    background-color: var(--interactive-hover);
+}
+
+.obsidian-paperless-refresh-button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.obsidian-paperless-scroll-container {
+    overflow-y: auto;
+}
+
+.obsidian-paperless-row {
+    display: flex;
+}
+
+.obsidian-paperless-column {
+    flex: 1;
+    min-width: 0;
+}
+
+.obsidian-paperless-column-content {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 0 4px;
+}
+
 .obsidian-paperless-overallDiv {
     position: relative;
 }
+
+.obsidian-paperless-overallDiv img {
+    width: 100%;
+    height: auto;
+    display: block;
+}
+
 .obsidian-paperless-imageDiv {
     height: 180px;
     border-radius: 10px;
@@ -8,18 +73,15 @@
     margin-bottom: 3px;
     overflow: hidden;
 }
+
 .obsidian-paperless-tagDiv {
     position: absolute;
     top: 0;
     right: 0;
 }
-.obsidian-paperless-column {
-    float: left;
-    width: 50%;
-} 
-/* Clear floats after the columns */
-.obsidian-paperless-row:after {
-    content: "";
-    display: table;
-    clear: both;
-  }
+
+.obsidian-paperless-loading {
+    text-align: center;
+    padding: 16px;
+    font-size: 12px;
+}
