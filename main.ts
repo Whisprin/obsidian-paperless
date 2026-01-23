@@ -388,9 +388,7 @@ class DocumentSelectorModal extends Modal {
 			tagLabel.style.color = tagData['text_color'];
 			tagLabel.style.background = tagData['color'];
 
-			tagItem.onclick = (e) => {
-				e.stopPropagation();
-				checkbox.checked = !checkbox.checked;
+			const updateTagSelection = () => {
 				if (checkbox.checked) {
 					this.selectedTags.add(tagId);
 				} else {
@@ -402,6 +400,17 @@ class DocumentSelectorModal extends Modal {
 				tagDropdown.style.display = 'none';
 				// Trigger search with new tag filter
 				searchInput.dispatchEvent(new Event('input'));
+			};
+
+			checkbox.onclick = (e) => {
+				e.stopPropagation();
+				updateTagSelection();
+			};
+
+			tagItem.onclick = (e) => {
+				e.stopPropagation();
+				checkbox.checked = !checkbox.checked;
+				updateTagSelection();
 			};
 		}
 
