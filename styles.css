@@ -85,3 +85,53 @@
     padding: 16px;
     font-size: 12px;
 }
+
+.obsidian-paperless-search-input {
+    margin-left: 10px;
+    padding: 5px;
+    flex: 1;
+}
+
+.obsidian-paperless-tag-filter {
+    position: relative;
+    margin-left: 10px;
+}
+
+.obsidian-paperless-tag-button {
+    padding: 5px 10px;
+    cursor: pointer;
+}
+
+.obsidian-paperless-tag-dropdown {
+    display: none;
+    position: absolute;
+    top: 100%;
+    right: 0;
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 4px;
+    padding: 8px;
+    margin-top: 4px;
+    max-height: 300px;
+    overflow-y: auto;
+    z-index: 1000;
+    min-width: 200px;
+}
+
+.obsidian-paperless-tag-item {
+    padding: 4px 8px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.obsidian-paperless-tag-item input[type="checkbox"] {
+    cursor: pointer;
+}
+
+.obsidian-paperless-tag-item span {
+    padding: 2px 6px;
+    border-radius: 4px;
+    flex: 1;
+}

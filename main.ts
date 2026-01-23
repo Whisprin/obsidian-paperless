@@ -262,8 +262,16 @@ async function createDocument(editor: Editor, settings: PluginSettings, paperles
 	editor.replaceRange('![[' + filename + ']]', paperlessUrl.range.from, paperlessUrl.range.to);
 }
 
-async function searchPaperlessDocuments(settings: PluginSettings, searchQuery: string): Promise<string[]> {
-	const url = new URL(settings.paperlessUrl + '/api/documents/?query=' + encodeURIComponent(searchQuery) + '&format=json');
+async function searchPaperlessDocuments(settings: PluginSettings, searchQuery: string, tagIds: number[] = []): Promise<string[]> {
+	let urlStr = settings.paperlessUrl + '/api/documents/?format=json';
+	if (searchQuery) {
+		urlStr += '&title_content=' + encodeURIComponent(searchQuery);
+	}
+	if (tagIds.length > 0) {
+		urlStr += '&tags__id__all=' + tagIds.join(',');
+	}
+	console.log(urlStr)
+	const url = new URL(urlStr);
 	try {
 		const result = await requestUrl({
 			url: url.toString(),
@@ -292,6 +300,8 @@ class DocumentSelectorModal extends Modal {
 	isLoading: boolean;
 	scrollTimeout: number | null;
 	searchTimeout: number | null;
+	selectedTags: Set<number>;
+	availableDocumentIds: string[];
 
 	constructor(app: App, editor: Editor, settings: PluginSettings) {
 		super(app);
@@ -304,6 +314,8 @@ class DocumentSelectorModal extends Modal {
 		this.isLoading = false;
 		this.scrollTimeout = null;
 		this.searchTimeout = null;
+		this.selectedTags = new Set();
+		this.availableDocumentIds = [];
 	}
 
 	async displayThumbnail(imgElement: HTMLImageElement, documentId: string) {
@@ -354,9 +366,55 @@ class DocumentSelectorModal extends Modal {
 			placeholder: 'Search documents...',
 			cls: 'obsidian-paperless-search-input'
 		});
-		searchInput.style.marginLeft = '10px';
-		searchInput.style.padding = '5px';
-		searchInput.style.flex = '1';
+
+		// Tag filter button and dropdown
+		const tagFilterContainer = header.createDiv({cls: 'obsidian-paperless-tag-filter'});
+
+		const tagFilterButton = tagFilterContainer.createEl('button', {
+			text: 'Tags',
+			cls: 'obsidian-paperless-tag-button'
+		});
+
+		const tagDropdown = tagFilterContainer.createDiv({cls: 'obsidian-paperless-tag-dropdown'});
+
+		// Populate tag dropdown
+		const tags = Array.from(tagCache.entries()).sort((a, b) => a[1]['name'].localeCompare(b[1]['name']));
+		for (const [tagId, tagData] of tags) {
+			const tagItem = tagDropdown.createDiv({cls: 'obsidian-paperless-tag-item'});
+
+			const checkbox = tagItem.createEl('input', {type: 'checkbox'});
+
+			const tagLabel = tagItem.createEl('span', {text: tagData['name']});
+			tagLabel.style.color = tagData['text_color'];
+			tagLabel.style.background = tagData['color'];
+
+			tagItem.onclick = (e) => {
+				e.stopPropagation();
+				checkbox.checked = !checkbox.checked;
+				if (checkbox.checked) {
+					this.selectedTags.add(tagId);
+				} else {
+					this.selectedTags.delete(tagId);
+				}
+				// Update button text to show count
+				tagFilterButton.setText(this.selectedTags.size > 0 ? `Tags (${this.selectedTags.size})` : 'Tags');
+				// Close dropdown
+				tagDropdown.style.display = 'none';
+				// Trigger search with new tag filter
+				searchInput.dispatchEvent(new Event('input'));
+			};
+		}
+
+		// Toggle dropdown visibility
+		tagFilterButton.onclick = (e) => {
+			e.stopPropagation();
+			tagDropdown.style.display = tagDropdown.style.display === 'none' ? 'block' : 'none';
+		};
+
+		// Close dropdown when clicking outside
+		contentEl.addEventListener('click', () => {
+			tagDropdown.style.display = 'none';
+		});
 
 		const refreshButton = header.createEl('button', {
 			text: '\u21bb',
@@ -379,8 +437,8 @@ class DocumentSelectorModal extends Modal {
 		};
 
 		const totalWidth = contentEl.innerWidth;
-		let availableDocumentIds = cachedResult.json['all'].sort((a:String, b:String) => {return +a - +b}).reverse();
-		const totalAssets = availableDocumentIds.length;
+		this.availableDocumentIds = cachedResult.json['all'].sort((a:String, b:String) => {return +a - +b}).reverse();
+		const totalAssets = this.availableDocumentIds.length;
 
 		// Create scroll container
 		this.scrollContainer = contentEl.createDiv({cls: 'obsidian-paperless-scroll-container'});
@@ -408,29 +466,28 @@ class DocumentSelectorModal extends Modal {
 			this.searchTimeout = window.setTimeout(async () => {
 				const searchQuery = (e.target as HTMLInputElement).value.trim();
 				
-				if (searchQuery === '') {
-					// Reset to cached results
-					availableDocumentIds = cachedResult.json['all'].sort((a:String, b:String) => {return +a - +b}).reverse();
-				} else {
-					// Perform search
-					searchInput.disabled = true;
-					loadingDiv.setText('Searching...');
-					loadingDiv.style.display = 'block';
-					
-					try {
-						const searchResults = await searchPaperlessDocuments(this.settings, searchQuery);
-						availableDocumentIds = searchResults.sort((a:String, b:String) => {return +a - +b}).reverse();
-					} catch (error) {
-						new Notice('Failed to search documents');
-						console.error('Search failed:', error);
-						loadingDiv.style.display = 'none';
-					} finally {
-						searchInput.disabled = false;
-						loadingDiv.style.display = 'none';
-					}
-				}
+			if (searchQuery === '' && this.selectedTags.size === 0) {
+				// Reset to cached results
+				this.availableDocumentIds = cachedResult.json['all'].sort((a:String, b:String) => {return +a - +b}).reverse();
+			} else {
+				// Perform search
+				searchInput.disabled = true;
+				loadingDiv.setText('Searching...');
+				loadingDiv.style.display = 'block';
 				
-				// Reset and reload modal content
+				try {
+					const tagIds = Array.from(this.selectedTags);
+					const searchResults = await searchPaperlessDocuments(this.settings, searchQuery, tagIds);
+					this.availableDocumentIds = searchResults.sort((a:String, b:String) => {return +a - +b}).reverse();
+				} catch (error) {
+					new Notice('Failed to search documents');
+					console.error('Search failed:', error);
+					loadingDiv.style.display = 'none';
+				} finally {
+					searchInput.disabled = false;
+					loadingDiv.style.display = 'none';
+				}
+			}				// Reset and reload modal content
 				this.currentPage = 0;
 				this.loadedAssets.clear();
 				left.empty();
@@ -441,21 +498,21 @@ class DocumentSelectorModal extends Modal {
 					this.scrollContainer.scrollTop = 0;
 				}
 				
-				// Initial load: load more items to ensure scrollbar appears on large screens
-				const initialBatchSize = Math.max(this.batchSize * 3, 20);
-				this.loadBatch(left, right, totalWidth, availableDocumentIds, 0, Math.min(initialBatchSize, availableDocumentIds.length), loadingDiv);
+			// Initial load: load more items to ensure scrollbar appears on large screens
+			const initialBatchSize = Math.max(this.batchSize * 3, 20);
+			this.loadBatch(left, right, totalWidth, this.availableDocumentIds, 0, Math.min(initialBatchSize, this.availableDocumentIds.length), loadingDiv);
 			}, 500);
 		});
 
 		// Setup scroll listener with throttling
-		this.setupScrollListener(left, right, totalWidth, availableDocumentIds, loadingDiv);
+		this.setupScrollListener(left, right, totalWidth, loadingDiv);
 
 		// Initial load: load more items to ensure scrollbar appears on large screens
 		const initialBatchSize = Math.max(this.batchSize * 3, 20); // Load at least 20 items initially
-		this.loadBatch(left, right, totalWidth, availableDocumentIds, 0, Math.min(initialBatchSize, totalAssets), loadingDiv);
+		this.loadBatch(left, right, totalWidth, this.availableDocumentIds, 0, Math.min(initialBatchSize, totalAssets), loadingDiv);
 	}
 
-	private setupScrollListener(left: HTMLElement, right: HTMLElement, totalWidth: number, availableDocumentIds: string[], loadingDiv: HTMLElement) {
+	private setupScrollListener(left: HTMLElement, right: HTMLElement, totalWidth: number, loadingDiv: HTMLElement) {
 		if (!this.scrollContainer) return;
 
 		this.scrollContainer.addEventListener('scroll', () => {
@@ -464,13 +521,13 @@ class DocumentSelectorModal extends Modal {
 			}
 
 			this.scrollTimeout = window.setTimeout(() => {
-				this.checkAndLoadMore(left, right, totalWidth, availableDocumentIds, loadingDiv);
+				this.checkAndLoadMore(left, right, totalWidth, loadingDiv);
 			}, 150); // Throttle to 150ms
 		});
 	}
 
-	private checkAndLoadMore(left: HTMLElement, right: HTMLElement, totalWidth: number, availableDocumentIds: string[], loadingDiv: HTMLElement) {
-		if (!this.scrollContainer || this.isLoading || this.currentPage >= availableDocumentIds.length) {
+	private checkAndLoadMore(left: HTMLElement, right: HTMLElement, totalWidth: number, loadingDiv: HTMLElement) {
+		if (!this.scrollContainer || this.isLoading || this.currentPage >= this.availableDocumentIds.length) {
 			return;
 		}
 
@@ -481,8 +538,8 @@ class DocumentSelectorModal extends Modal {
 
 		// Load more when user scrolls past 60% or when near bottom
 		if (scrollPercentage > 0.6 || (scrollHeight - (scrollTop + clientHeight) < 300)) {
-			const endIndex = Math.min(this.currentPage + this.batchSize, availableDocumentIds.length);
-			this.loadBatch(left, right, totalWidth, availableDocumentIds, this.currentPage, endIndex, loadingDiv);
+			const endIndex = Math.min(this.currentPage + this.batchSize, this.availableDocumentIds.length);
+			this.loadBatch(left, right, totalWidth, this.availableDocumentIds, this.currentPage, endIndex, loadingDiv);
 		}
 	}
 
